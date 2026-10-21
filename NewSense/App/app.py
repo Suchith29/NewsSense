@@ -1,7 +1,7 @@
 import streamlit as st
 from utils import (
     extract_from_url, extract_from_pdf, preprocess, predict_category, generate_summary,
-    get_category_description, translate_text, ensure_english
+    get_category_description, translate_text, ensure_english, extract_keywords
 )
 from bertopic import BERTopic
 from wordcloud import WordCloud
@@ -11,6 +11,8 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize, sent_tokenize
 from fpdf import FPDF
 import time
+import os
+import matplotlib.font_manager as fm
 
 # Download necessary NLTK data if missing
 try:
@@ -90,18 +92,74 @@ with st.sidebar:
 # Retrieve extracted/input text from session state
 text = st.session_state.get("text", "")
 
-# Function to create a PDF summary
+
+@st.cache_resource
+def load_topic_model():
+    return BERTopic.load("models/bertopic_model")
+
+# Function to create a PDF summary with Unicode font support
 def create_pdf(summary_text: str) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font("Arial", size=12)
+
+    font_name = "Helvetica"
+    font_loaded = False
+
+    # 1. Try finding DejaVu Sans from matplotlib (supports Unicode, symbols, currency like ₹)
+    try:
+        font_path = fm.findfont("DejaVu Sans")
+        if font_path and os.path.exists(font_path):
+            pdf.add_font("DejaVu", fname=font_path)
+            font_name = "DejaVu"
+            font_loaded = True
+    except Exception:
+        font_loaded = False
+
+    # 2. Try Windows Arial / Segoe UI TTF as fallback
+    if not font_loaded:
+        for win_font in ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf"]:
+            if os.path.exists(win_font):
+                try:
+                    pdf.add_font("WinUnicode", fname=win_font)
+                    font_name = "WinUnicode"
+                    font_loaded = True
+                    break
+                except Exception:
+                    pass
+
+    # 3. If no Unicode font could be loaded, replace incompatible characters for core font
+    if not font_loaded:
+        summary_text = (
+            summary_text.replace("₹", "Rs. ")
+            .replace("“", '"')
+            .replace("”", '"')
+            .replace("‘", "'")
+            .replace("’", "'")
+            .replace("—", "-")
+            .replace("–", "-")
+            .encode("latin-1", "replace")
+            .decode("latin-1")
+        )
+
+    pdf.set_font(font_name, size=14)
     pdf.set_text_color(0, 0, 128)
-    pdf.cell(0, 10, "NewsSense Summary", ln=True, align='C')
-    pdf.ln(5)
+    pdf.cell(0, 10, "NewsSense Summary", align='C')
+    pdf.ln(10)
+    pdf.set_font(font_name, size=11)
     pdf.set_text_color(0, 0, 0)
-    pdf.multi_cell(0, 10, summary_text)
-    return pdf.output(dest='S')
+
+    try:
+        pdf.multi_cell(0, 7, summary_text)
+    except Exception:
+        safe_text = summary_text.replace("₹", "Rs. ").encode("latin-1", "replace").decode("latin-1")
+        pdf.set_font("Helvetica", size=11)
+        pdf.multi_cell(0, 7, safe_text)
+
+    try:
+        return bytes(pdf.output())
+    except TypeError:
+        return bytes(pdf.output(dest='S'))
 
 # Main processing block
 if text:
@@ -118,7 +176,7 @@ if text:
     with st.spinner("Loading model and predicting..."):
         time.sleep(0.5)  # simulate loading
 
-        topic_model = BERTopic.load("models/bertopic_model")
+        topic_model = load_topic_model()
         preprocessed = preprocess(text)
 
         category, confidence = predict_category(preprocessed, True)
@@ -126,8 +184,41 @@ if text:
             category = 'others'
 
         summary = generate_summary(text)
+
+        # 1. Extract article-specific key terms directly from the article
+        article_kw = extract_keywords(text, top_n=20)
+        keyword_scores = {w: float(count) for w, count in article_kw}
+
+        # 2. Predict topic with BERTopic
         topics, _ = topic_model.transform([preprocessed])
-        topic_keywords = topic_model.get_topic(topics[0])
+        assigned_topic = topics[0]
+
+        # If BERTopic assigned outlier cluster (-1), find closest semantic topic cluster
+        if assigned_topic == -1:
+            try:
+                sim_topics, _ = topic_model.find_topics(preprocessed, top_n=1)
+                if sim_topics and sim_topics[0] != -1:
+                    assigned_topic = sim_topics[0]
+            except Exception:
+                pass
+
+        # 3. Retrieve topic keywords from cluster (ignoring generic news noise)
+        news_noise = {
+            "say", "says", "said", "mr", "mrs", "ms", "also", "would", "could",
+            "told", "get", "like", "one", "two", "new", "year", "years", "time",
+            "first", "last", "people", "many", "well", "way", "make", "may",
+            "take", "come", "go", "see", "know", "back", "much", "day", "days",
+            "uk", "eu", "report", "reported", "spokesman", "statement"
+        }
+        all_stops = stop_words.union(news_noise)
+
+        if assigned_topic is not None and assigned_topic != -1:
+            raw_topic_words = topic_model.get_topic(assigned_topic) or []
+            for w, score in raw_topic_words:
+                w_lower = w.lower()
+                if w_lower.isalpha() and w_lower not in all_stops and len(w_lower) > 2:
+                    keyword_scores[w_lower] = keyword_scores.get(w_lower, 0.0) + (score * 5.0)
+
         explanation = get_category_description(category)
 
         # Translate summary into Hindi, Telugu, Kannada
@@ -142,7 +233,7 @@ if text:
             "translated_te": translated_te,
             "translated_kn": translated_kn,
             "category": category,
-            "topic_keywords": topic_keywords,
+            "keyword_scores": keyword_scores,
             "category_explanation": explanation,
             "current_lang": st.session_state.get("current_lang", "en")
         })
@@ -195,24 +286,23 @@ if text:
             st.info("📄 PDF download is only available for the English summary.")
 
     # Word cloud and key terms for topics
-    if topic_keywords:
-        filtered_keywords = [
-            word for word, _ in topic_keywords if word.lower() not in stop_words and word.isalpha()
-        ]
+    keyword_scores = st.session_state.get("keyword_scores", {})
+    if keyword_scores:
         st.subheader("🌤️ Topic Word Cloud")
         wc = WordCloud(
             width=800, height=300, background_color='white', colormap='Set2'
-        ).generate(" ".join(filtered_keywords))
+        ).generate_from_frequencies(keyword_scores)
 
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(10, 4))
         ax.imshow(wc, interpolation="bilinear")
         ax.axis("off")
         st.pyplot(fig)
 
+        sorted_terms = sorted(keyword_scores.keys(), key=lambda k: keyword_scores[k], reverse=True)[:15]
         st.subheader("🔑 Key Terms")
-        st.markdown(", ".join(filtered_keywords))
+        st.markdown(", ".join(sorted_terms))
     else:
-        st.warning("No topics could be extracted.")
+        st.warning("No keywords could be extracted from this text.")
 
 else:
     st.info("👈 Use the sidebar to provide a URL, upload a PDF, or paste text to begin.")

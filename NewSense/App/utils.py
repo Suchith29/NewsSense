@@ -105,3 +105,42 @@ def generate_summary(text: str) -> str:
         return text
     # Summarize only first 1024 tokens to avoid exceeding model limits
     return summarizer(text[:1024])[0]['summary_text']
+
+def extract_keywords(text: str, top_n: int = 20):
+    """
+    Extract key terms and their frequency directly from the article text.
+    Filters out generic reporting words and stopwords.
+    """
+    from collections import Counter
+    import nltk
+    from nltk.corpus import stopwords
+
+    try:
+        nltk_stops = set(stopwords.words("english"))
+    except Exception:
+        nltk_stops = set()
+
+    news_noise = {
+        "say", "says", "said", "mr", "mrs", "ms", "also", "would", "could",
+        "told", "get", "like", "one", "two", "new", "year", "years", "time",
+        "first", "last", "people", "many", "well", "way", "make", "may",
+        "take", "come", "go", "see", "know", "back", "much", "day", "days",
+        "uk", "eu", "report", "reported", "spokesman", "statement"
+    }
+    stop_words = nltk_stops.union(news_noise)
+
+    doc = nlp(text)
+    words = []
+    for token in doc:
+        w = token.lemma_.lower().strip()
+        if (
+            token.pos_ in ["NOUN", "PROPN", "ADJ"]
+            and len(w) > 2
+            and w not in stop_words
+            and w.isalpha()
+        ):
+            words.append(w)
+
+    counts = Counter(words)
+    return counts.most_common(top_n)
+
