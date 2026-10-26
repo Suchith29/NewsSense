@@ -15,3 +15,6 @@ NewSense/App/__pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+*.bundle
+
