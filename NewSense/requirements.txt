@@ -23,3 +23,6 @@ googletrans==4.0.0-rc1
 newspaper3k==0.2.8
 PyMuPDF==1.24.2  # formerly 'fitz'
 
+
+lxml_html_clean>=0.1.0
+
