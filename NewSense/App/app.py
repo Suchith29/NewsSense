@@ -18,16 +18,11 @@ from utils import (
     get_category_description, translate_text, ensure_english, extract_keywords
 )
 
-# Download necessary NLTK data if missing
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
+# Download necessary NLTK data (quiet=True → no-op if already present)
+nltk.download('stopwords', quiet=True)
+nltk.download('punkt', quiet=True)
+nltk.download('punkt_tab', quiet=True)
+nltk.download('wordnet', quiet=True)
 
 stop_words = set(stopwords.words('english'))
 
