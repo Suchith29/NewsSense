@@ -1,6 +1,8 @@
 # === app/utils.py ===
 
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import torch
 import string
 import fitz  # PyMuPDF
 from newspaper import Article, Config

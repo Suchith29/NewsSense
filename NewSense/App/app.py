@@ -1,4 +1,8 @@
 import os
+# Prevent OpenMP runtime library conflict on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import torch  # Crucial: Load PyTorch runtime before any other numerical libraries to avoid WinError 1114
+
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
